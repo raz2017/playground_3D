@@ -1,0 +1,24 @@
+[package]
+name = "hello_rust"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Safe plain-data-to-bytes conversion for the Rust structs shared with shaders.
+bytemuck = { version = "1.25", features = ["derive"] }
+# Vulkan API bindings; VMA handles allocation/suballocation of Vulkan memory.
+ash = "0.38"
+vk-mem = "0.5"
+# Compile the embedded GLSL shaders to SPIR-V when the application starts.
+shaderc = { version = "0.10", features = ["prefer-static-linking"] }
+# Window creation, keyboard/events, and platform-specific Vulkan surfaces.
+sdl3 = { version = "0.20", features = ["build-from-source-static", "ash"] }
+# Import glTF assets; glam supplies vector and matrix math.
+gltf = "1.4"
+glam = "0.30"
+
+# Build native SDL with the release C runtime, matching Rust and the Vulkan SDK.
+# The application's Rust code retains its normal debug information.
+[profile.dev.package.sdl3-sys]
+opt-level = 1
+debug = false
