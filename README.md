@@ -5,49 +5,108 @@ A Rust port of [constref's modern-vulkan lesson_03](https://github.com/nickenche
 The lesson 01 checkpoint is tagged `vulkan-triangle-baseline`.
 The lesson 02 renderer with learning comments is commit `53a63cd`.
 
-## Run
+## Quick start (Windows)
+
+Run these commands from the repository root in PowerShell. Set up the prerequisites below before the first build.
 
 ```powershell
+cargo run -- --help
 cargo run
 ```
 
-A resizable 1920 x 1080 window displays the upstream modular demo, using its imported camera. Its glTF, binary buffer, and textures are bundled in `assets/modular-demo` with source attribution. Escape or the window's close button exits. Press **F12** to toggle FPS diagnostics in the top-right corner (hidden initially). Debug builds enable the Khronos validation layer and synchronization validation.
+The viewer opens a resizable 1920 x 1080 window with the bundled modular demo and its imported camera. The mouse is captured immediately: press **Tab** to release it or **Escape** to quit. **F12** shows FPS diagnostics, which are hidden initially.
 
-Use the **mouse** to look around, **W / S** to move forward/backward, and **A / D** to strafe. Movement is 3 scene units per second; mouse sensitivity is 0.3 degrees per relative pixel. Press **Grave (`)** to toggle walking/flying: walking maintains height, while flying follows the look direction. There is no collision or gravity. **F11** toggles fullscreen; **Tab** releases/captures the mouse. Input pauses when the window loses focus, and mouse capture resumes according to your preference when focus returns.
+Cargo builds SDL3 from source on the first run, so the initial build can take longer. Shaders are embedded in the executable and compiled to SPIR-V at startup.
 
-The first camera in the active scene supplies position, orientation, field of view, and clipping planes. Parent transforms are accumulated, and camera-attached meshes follow movement. Without a camera, the viewer starts at `(0, 1, 0)` looking along `-Z`, with a 65-degree FOV and near/far planes 0.01/1000. Use `--orbit` to orbit the origin instead (distance 3, W/S zoom, Up/Down pitch, mouse look).
+### Prerequisites
 
-The original two-cube demo remains available and now includes a camera under its transformed parent:
+- Rust with the `x86_64-pc-windows-msvc` toolchain. The crate uses Rust edition 2024.
+- Visual Studio C++ build tools and Windows SDK.
+- CMake on `PATH`; Cargo builds and statically links SDL3 automatically.
+- The LunarG Vulkan SDK, with `VULKAN_SDK` pointing to its installation directory. The `shaderc` crate uses the SDK's static shader compiler library. Validation layers come from the SDK as well.
+- A GPU and driver supporting Vulkan 1.3 and the features listed below.
+
+Run from an x64 Visual Studio Developer PowerShell if native tools cannot be found. Check the tools and SDK environment with:
+
+```powershell
+rustc --version
+cargo --version
+rustup show active-toolchain
+cmake --version
+$env:VULKAN_SDK
+```
+
+If the shaderc library is unavailable, its crate falls back to building from source, which also requires Git, Python, and Ninja on `PATH`.
+
+The renderer requires dynamic rendering, synchronization2, timeline semaphores, buffer device addresses, scalar block layout, runtime texture descriptor arrays with nonuniform indexing and update-after-bind/partially-bound bindings, `shaderInt64`, `multiDrawIndirect`, `drawIndirectFirstInstance`, and a graphics queue capable of presentation. Support is checked before device creation; Vulkan 1.3 support alone is not sufficient.
+
+## Controls
+
+| Input | Action |
+| --- | --- |
+| Mouse | Look around while captured |
+| W / S | Move forward / backward; zoom in / out in orbit mode |
+| A / D | Strafe in first-person mode |
+| Up / Down | Adjust pitch in orbit mode |
+| Grave (backtick) | Toggle walking / flying in first-person mode |
+| Tab | Release / capture the mouse |
+| F11 | Toggle fullscreen |
+| F12 | Toggle FPS diagnostics |
+| Escape / close window | Quit |
+
+Walking maintains height; flying follows the look direction. There is no collision or gravity. Movement is 3 scene units per second; mouse sensitivity is 0.3 degrees per relative pixel. Input pauses when the window loses focus, and mouse capture resumes according to your preference when focus returns.
+
+## Load a scene
+
+Load an external `.gltf` or `.glb` with `--model`. Keep a `.gltf` file with all of its referenced buffers and images. Relative model paths are resolved from the current working directory.
+
+```powershell
+cargo run -- --model "D:/glTF-Sample-Models/2.0/Sponza/glTF/Sponza.gltf"
+```
+
+The original two-cube demo is useful for a small, self-contained scene:
 
 ```powershell
 cargo run -- --model assets/demo.gltf
 cargo run -- --model assets/demo.gltf --orbit
 ```
 
-Load an external `.gltf` (with its referenced buffers/images) or `.glb`:
+The first camera in the active scene supplies position, orientation, field of view, and clipping planes. Parent transforms are accumulated, and camera-attached meshes follow movement. Without a camera, the viewer starts at `(0, 1, 0)` looking along `-Z`, with a 65-degree FOV and near/far planes 0.01/1000. `--orbit` orbits the origin at an initial distance of 3; it does not automatically frame the model.
+
+The default model is `assets/modular-demo/modular-demo.gltf`, resolved relative to the source checkout at compile time. When distributing the executable, supply assets separately and use `--model`. See the [bundled scene notes](assets/modular-demo/README.md) for attribution and the locally added trash can.
+
+### Command-line options
+
+Pass application options after Cargo's `--` separator, for example `cargo run --release -- --model assets/demo.gltf`.
+
+| Option | Behavior |
+| --- | --- |
+| `--help` | Print controls and options, then exit without opening a window |
+| `--model PATH` | Load a `.gltf` or `.glb`; defaults to the bundled modular demo |
+| `--orbit` | Orbit the origin instead of using first-person movement |
+| `--frames N` | Exit after N submitted frames; N must be a positive integer |
+| `--smoke-test` | Exercise camera/window behavior; defaults to 120 submitted frames |
+| `--no-validation` | Disable Vulkan validation, including during a smoke test |
+
+Debug builds enable the Khronos validation layer and synchronization validation. Release builds disable validation by default, except when running the smoke test. `--no-validation` overrides either default.
 
 ```powershell
-cargo run -- --model "D:/glTF-Sample-Models/2.0/Sponza/glTF/Sponza.gltf"
-```
-
-```powershell
-cargo run -- --smoke-test
+cargo run --release
 cargo run -- --frames 300
 cargo run -- --no-validation
-cargo run --release
 ```
 
-The smoke test renders 120 submitted frames, exercises mouse-look math and camera movement, toggles walk/fly and mouse capture, toggles diagnostics, changes the window size twice, minimizes/restores it, enters/exits fullscreen, and checks for validation errors through shutdown. It requires at least six swapchain creations and completion of the lifecycle sequence. A validation error or incomplete smoke test makes the program exit unsuccessfully. Combine it with `--model` or `--orbit` to test another scene or mode. `--frames N` provides a finite render run. Release builds disable validation by default, except when running the smoke test. `--no-validation` overrides either default.
+## Troubleshooting
 
-## Prerequisites on Windows
-
-- Rust with the `x86_64-pc-windows-msvc` toolchain.
-- Visual Studio C++ build tools and Windows SDK.
-- CMake on PATH; Cargo builds and statically links SDL3 automatically.
-- A GPU driver supporting Vulkan 1.3, dynamic rendering, synchronization2, timeline semaphores, buffer device addresses, scalar block layout, runtime texture descriptor arrays with nonuniform indexing and update-after-bind/partially-bound bindings, shaderInt64, multiDrawIndirect, drawIndirectFirstInstance, and a graphics queue capable of presentation. Support is checked before device creation.
-- The LunarG Vulkan SDK, with `VULKAN_SDK` pointing to its installation directory. The shaderc crate uses the SDK's static shader compiler library. Validation layers come from the SDK as well.
-
-Run from an x64 Visual Studio Developer PowerShell if native tools cannot be found. If the shaderc library is unavailable, its crate falls back to building from source, which also requires Git, Python, and Ninja on PATH.
+| Symptom | What to check |
+| --- | --- |
+| Native build cannot find a compiler, linker, or CMake | Install the C++ build tools and Windows SDK, put CMake on `PATH`, and use an x64 Visual Studio Developer PowerShell. |
+| shaderc fails to build or link | Check `VULKAN_SDK` and the SDK's static shader compiler library. A source build also needs Git, Python, and Ninja on `PATH`. |
+| `Validation layer missing` | Install the Vulkan SDK's validation layers, or use `cargo run -- --no-validation` to run without validation. |
+| `Vulkan 1.3 or newer is required` / `No GPU supports lesson 02` | Check the installed GPU driver and the required features above. The latter message retains the previous lesson's name. |
+| Model, buffer, or image cannot be loaded | Check the model path and keep external `.gltf` resources at their referenced relative paths. |
+| External model is out of view | The viewer does not automatically frame assets. Check the scene camera and scale; orbit mode targets the origin. |
+| Mouse is locked to the window | Press Tab to release it. |
 
 ## Code map
 
@@ -63,9 +122,10 @@ Run from an x64 Visual Studio Developer PowerShell if native tools cannot be fou
 | `src/shaders/shader.frag` | Base-color texture sampling and directional/hemisphere lighting |
 | `assets/modular-demo/` | Upstream lesson 03 scene, buffer, textures, and source attribution |
 | `assets/demo.gltf` | Self-contained original demo with shared geometry, two materials, and a camera |
-| `tools/generate_demo.py` | Reproduce the demo using Python's standard library |
+| `tools/generate_demo.py` | Reproduce the two-cube demo using Python's standard library |
+| `tools/add_trash_can.py` | Add the local trash can to a fresh upstream modular demo |
 
-Dependencies are `ash` (Vulkan bindings/loading), `sdl3` (windows/events/surfaces), `vk-mem` (VMA), `shaderc` (GLSL to SPIR-V), `gltf` (scene/buffer/image import), `glam` (matrix math), and `bytemuck` (initialized shader data as bytes). Shaders are embedded and compiled at startup. The default demo is resolved relative to the source checkout at compile time; use `--model` when distributing the executable with other assets.
+Dependencies are `ash` (Vulkan bindings/loading), `sdl3` (windows/events/surfaces), `vk-mem` (VMA), `shaderc` (GLSL to SPIR-V), `gltf` (scene/buffer/image import), `glam` (matrix math), and `bytemuck` (initialized shader data as bytes).
 
 ## Port decisions
 
@@ -89,13 +149,22 @@ This is the lesson's static, opaque base-color renderer: it does not implement f
 
 ## Verification
 
+Run unit tests and lint checks from the repository root:
+
 ```powershell
 cargo test
 cargo clippy --all-targets -- -D warnings
+```
+
+Smoke tests open a real window and require the Vulkan setup above; they are not headless tests. Let each run finish without closing its window:
+
+```powershell
 cargo run -- --smoke-test
 cargo run -- --model assets/demo.gltf --smoke-test
 cargo run -- --model assets/demo.gltf --orbit --smoke-test
 cargo run -- --model "path/to/model.glb" --smoke-test
 ```
 
-Tests check the shader ABI, shared-mesh imports, material/texture selection, accumulated world/WVP transforms, cycle rejection, pixel conversion, imported camera parent transforms and selection, attached mesh movement, mouse-look direction/pitch limits, walk/fly motion, frame-rate independence, view inversion, and projection depth/aspect. The smoke test additionally validates GPU uploads, texture descriptors, indirect draws, and the fullscreen/resize/minimize window lifecycle.
+The smoke test renders at least 120 submitted frames, exercises mouse-look math and camera movement, toggles walk/fly, mouse capture and diagnostics, changes the window size twice, minimizes/restores it, and enters/exits fullscreen. It requires at least six swapchain creations and completion of the lifecycle sequence within 30 seconds. Validation errors, including those reported during shutdown, or an incomplete sequence cause a nonzero exit code. A successful run reports `Clean shutdown; validation errors: 0`; that message only confirms validation ran when validation was enabled. Combine `--smoke-test` with `--model` or `--orbit` as shown above. If you also pass `--frames`, use at least 120; a smaller limit cannot satisfy the smoke-test checks.
+
+Unit tests check the shader ABI, shared-mesh imports, material/texture selection, accumulated world/WVP transforms, cycle rejection, pixel conversion, imported camera parent transforms and selection, attached mesh movement, mouse-look direction/pitch limits, walk/fly motion, frame-rate independence, view inversion, and projection depth/aspect. The smoke test additionally validates GPU uploads, texture descriptors, indirect draws, and the fullscreen/resize/minimize window lifecycle.
