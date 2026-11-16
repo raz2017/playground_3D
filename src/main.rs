@@ -62,6 +62,7 @@
 //! back to `main()`, which prints the failure and exits.
 
 mod camera;
+mod collision;
 mod diagnostics;
 mod renderer;
 mod scene;
@@ -95,7 +96,7 @@ fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help") {
         println!(
-            "Vulkan glTF viewer (lesson 03)\n\nEscape / close window: quit\nF12: toggle FPS diagnostics\nMouse: look around\nWASD: move / strafe\nGrave (`): toggle walk / fly\nF11: toggle fullscreen\nTab: release / capture mouse\n--orbit: orbit the origin (W / S zoom, Up / Down pitch)\n--model PATH: load a .gltf or .glb scene (default: bundled demo)\n--frames N: exit after N submitted frames\n--smoke-test: render 120 frames, resize, minimize, restore, toggle fullscreen, then exit\n--no-validation: disable Vulkan validation"
+            "Vulkan glTF viewer (lesson 03)\n\nEscape / close window: quit\nF12: toggle FPS diagnostics\nMouse: look around\nWASD: move / strafe\nSpace: jump while walking\nGrave (`): toggle walk / fly\nF11: toggle fullscreen\nTab: release / capture mouse\n--orbit: orbit the origin (W / S zoom, Up / Down pitch)\n--model PATH: load a .gltf or .glb scene (default: bundled demo)\n--frames N: exit after N submitted frames\n--smoke-test: render 120 frames, resize, minimize, restore, toggle fullscreen, then exit\n--no-validation: disable Vulkan validation"
         );
         return Ok(());
     }
@@ -140,6 +141,13 @@ fn run() -> Result<()> {
     let scene = scene::Scene::load(&model)?;
     // Initialize the camera before moving scene ownership into the renderer.
     let mut camera = scene.initial_camera()?;
+    // Preserve spawn foot clearance with the taller standing player.
+    camera.position.y += 0.7;
+    let collision = collision::CollisionWorld::from_scene(
+        &scene,
+        camera.attachment.as_ref().map(|attachment| attachment.node),
+    )?;
+    camera.set_collision(collision);
     if orbit {
         camera.orbit();
     }
@@ -186,12 +194,17 @@ fn run() -> Result<()> {
                 {
                     camera.mouse_look(xrel, yrel);
                 }
+                Event::KeyDown {
+                    scancode: Some(Scancode::Space),
+                    repeat: false,
+                    ..
+                } if window.has_input_focus() && !minimized => camera.jump(),
                 // Key-up toggles once per press, independently of keyboard repeat.
                 Event::KeyUp {
                     scancode: Some(Scancode::Grave),
                     ..
                 } => {
-                    camera.fly = !camera.fly;
+                    camera.set_flying(!camera.fly);
                     println!(
                         "Camera movement: {}",
                         if camera.fly { "fly" } else { "walk" }
@@ -235,6 +248,7 @@ fn run() -> Result<()> {
         if smoke {
             match ticks {
                 5 | 45 | 75 => diagnostics.toggle(),
+                10 => camera.jump(),
                 20 => {
                     window.set_size(900, 600)?;
                     renderer.request_resize();
@@ -267,9 +281,9 @@ fn run() -> Result<()> {
                 95 => {
                     mouse.set_relative_mouse_mode(&window, false);
                     mouse.set_relative_mouse_mode(&window, true);
-                    camera.fly = true;
+                    camera.set_flying(true);
                 }
-                105 => camera.fly = false,
+                105 => camera.set_flying(false),
                 _ => (),
             }
             if started.elapsed() > Duration::from_secs(30) {

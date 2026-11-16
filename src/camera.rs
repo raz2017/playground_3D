@@ -1,8 +1,17 @@
 //! Lesson 03 camera math and controls, kept separate from SDL and Vulkan calls.
 //! A camera pose places it in world space; its inverse is the view matrix that
 //! moves the world into camera space. Angles and glTF field of view use radians.
+use crate::collision::CollisionWorld;
 use crate::renderer::Result;
 use glam::{Mat4, Quat, Vec3};
+
+const JUMP_SPEED: f32 = 5.0;
+const GRAVITY: f32 = 9.81;
+
+struct Jump {
+    landing_height: f32,
+    velocity: f32,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Projection {
@@ -113,6 +122,10 @@ pub struct Camera {
     pub fly: bool,
     pub projection: Projection,
     pub attachment: Option<CameraAttachment>,
+    jump: Option<Jump>,
+    collision: Option<CollisionWorld>,
+    vertical_velocity: f32,
+    grounded: bool,
 }
 
 impl Default for Camera {
@@ -131,6 +144,10 @@ impl Default for Camera {
                 far: Some(1000.0),
             },
             attachment: None,
+            jump: None,
+            collision: None,
+            vertical_velocity: 0.0,
+            grounded: false,
         }
     }
 }
@@ -155,6 +172,7 @@ impl Camera {
     }
 
     pub fn orbit(&mut self) {
+        self.jump = None;
         self.mode = CameraMode::Orbit;
         self.yaw = std::f32::consts::FRAC_PI_2;
         self.pitch = 0.0;
@@ -177,6 +195,41 @@ impl Camera {
     fn orientation(&self) -> Quat {
         // First pitch around local X, then yaw around world Y; no roll.
         Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch)
+    }
+
+    pub fn set_collision(&mut self, world: CollisionWorld) {
+        self.grounded = world.move_player(self.position, -Vec3::Y * 0.01).grounded;
+        self.collision = Some(world);
+        self.jump = None;
+        self.vertical_velocity = 0.0;
+    }
+
+    /// Collision-backed walking requires support; standalone cameras use a flat floor.
+    pub fn jump(&mut self) {
+        if self.collision.is_some() {
+            if self.mode == CameraMode::FirstPerson && !self.fly && self.grounded {
+                self.vertical_velocity = JUMP_SPEED;
+                self.grounded = false;
+            }
+            return;
+        }
+        if self.mode == CameraMode::FirstPerson && !self.fly && self.jump.is_none() {
+            self.jump = Some(Jump {
+                landing_height: self.position.y,
+                velocity: JUMP_SPEED,
+            });
+        }
+    }
+
+    pub fn set_flying(&mut self, fly: bool) {
+        self.fly = fly;
+        // Switching movement modes ends the jump at the current height.
+        self.jump = None;
+        self.vertical_velocity = 0.0;
+        self.grounded = self
+            .collision
+            .as_ref()
+            .is_some_and(|world| world.move_player(self.position, -Vec3::Y * 0.01).grounded);
     }
 
     pub fn update(&mut self, keys: &sdl3::keyboard::KeyboardState<'_>, dt: f32) {
@@ -207,11 +260,55 @@ impl Camera {
                 let direction = if self.fly {
                     rotation * Vec3::NEG_Z
                 } else {
-                    // Walking follows yaw only, keeping height fixed even when
-                    // looking up/down. This is free movement without collision.
+                    // Walking follows yaw only; jumping handles vertical motion.
                     Vec3::new(-self.yaw.sin(), 0.0, -self.yaw.cos())
                 };
-                self.position += (right * strafe + direction * forward) * step;
+                let movement = (right * strafe + direction * forward) * step;
+                if let Some(world) = &self.collision
+                    && !self.fly
+                {
+                    // Small physics steps handle jump apices and contact changes.
+                    let steps = (dt / (1.0 / 120.0)).ceil().max(1.0) as u32;
+                    let tick = dt / steps as f32;
+                    for _ in 0..steps {
+                        let vertical = self.vertical_velocity * tick - 0.5 * GRAVITY * tick * tick;
+                        self.vertical_velocity -= GRAVITY * tick;
+                        let motion = world.move_player(
+                            self.position,
+                            movement / steps as f32 + Vec3::Y * vertical,
+                        );
+                        self.position = motion.position;
+                        self.grounded = motion.grounded;
+                        if (motion.grounded && self.vertical_velocity < 0.0)
+                            || (motion.ceiling && self.vertical_velocity > 0.0)
+                        {
+                            self.vertical_velocity = 0.0;
+                        }
+                        // Keep contact across the small separation used by the
+                        // collision solver, so Space works reliably when resting.
+                        if self.vertical_velocity <= 0.0 && !self.grounded {
+                            let support = world.move_player(self.position, -Vec3::Y * 0.01);
+                            if support.grounded {
+                                self.position = support.position;
+                                self.grounded = true;
+                                self.vertical_velocity = 0.0;
+                            }
+                        }
+                    }
+                    return;
+                }
+                self.position += movement;
+                if self.fly {
+                    self.jump = None;
+                } else if let Some(jump) = &mut self.jump {
+                    // Integrate constant acceleration exactly for this time step.
+                    self.position.y += jump.velocity * dt - 0.5 * GRAVITY * dt * dt;
+                    jump.velocity -= GRAVITY * dt;
+                    if self.position.y <= jump.landing_height && jump.velocity <= 0.0 {
+                        self.position.y = jump.landing_height;
+                        self.jump = None;
+                    }
+                }
             }
         }
     }
@@ -253,6 +350,56 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jump_rises_moves_and_lands_at_takeoff_height() {
+        let mut camera = Camera::default();
+        camera.position.y = 7.0;
+        camera.jump();
+        camera.move_axes(0.0, 1.0, 0.0, 0.2);
+        assert!(camera.position.y > 7.0);
+        assert!(camera.position.z < 0.0);
+        let velocity = camera.jump.as_ref().unwrap().velocity;
+        camera.jump();
+        assert_eq!(camera.jump.as_ref().unwrap().velocity, velocity);
+        for _ in 0..120 {
+            camera.move_axes(0.0, 0.0, 0.0, 1.0 / 60.0);
+        }
+        assert_eq!(camera.position.y, 7.0);
+        assert!(camera.jump.is_none());
+        camera.jump();
+        assert!(camera.jump.is_some());
+    }
+
+    #[test]
+    fn jump_is_frame_rate_independent() {
+        let mut camera = Camera::default();
+        let mut split = Camera::default();
+        camera.jump();
+        split.jump();
+        camera.move_axes(0.0, 0.0, 0.0, 0.6);
+        for _ in 0..60 {
+            split.move_axes(0.0, 0.0, 0.0, 0.01);
+        }
+        assert!(camera.position.abs_diff_eq(split.position, 1e-5));
+    }
+
+    #[test]
+    fn jump_is_disabled_in_fly_and_orbit_modes() {
+        let mut camera = Camera::default();
+        camera.jump();
+        camera.move_axes(0.0, 0.0, 0.0, 0.2);
+        camera.set_flying(true);
+        let height = camera.position.y;
+        camera.jump();
+        camera.move_axes(0.0, 0.0, 0.0, 1.0);
+        assert_eq!(camera.position.y, height);
+        assert!(camera.jump.is_none());
+        camera.set_flying(false);
+        camera.orbit();
+        camera.jump();
+        assert!(camera.jump.is_none());
+    }
 
     #[test]
     fn mouse_look_has_correct_direction_and_clamps_pitch() {

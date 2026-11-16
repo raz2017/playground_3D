@@ -47,6 +47,7 @@ The renderer requires dynamic rendering, synchronization2, timeline semaphores, 
 | Mouse | Look around while captured |
 | W / S | Move forward / backward; zoom in / out in orbit mode |
 | A / D | Strafe in first-person mode |
+| Space | Jump while walking (one jump per press) |
 | Up / Down | Adjust pitch in orbit mode |
 | Grave (backtick) | Toggle walking / flying in first-person mode |
 | Tab | Release / capture the mouse |
@@ -54,7 +55,9 @@ The renderer requires dynamic rendering, synchronization2, timeline semaphores, 
 | F12 | Toggle FPS diagnostics |
 | Escape / close window | Quit |
 
-Walking maintains height; flying follows the look direction. There is no collision or gravity. Movement is 3 scene units per second; mouse sensitivity is 0.3 degrees per relative pixel. Input pauses when the window loses focus, and mouse capture resumes according to your preference when focus returns.
+Walking uses gravity and collision against the scene's static triangles. Walls block movement while allowing sliding; floors and object tops support the player, and ceilings stop upward jumps. Space jumps only when grounded (about 1.27 scene units high); walking off an edge causes a fall. Flying follows the look direction and bypasses collision and gravity. Movement is 3 scene units per second; mouse sensitivity is 0.3 degrees per relative pixel. Input pauses when the window loses focus, and mouse capture resumes according to your preference when focus returns.
+
+The player uses an upright box 2.2 units wide/deep and 1.9 units tall (1.1 units of horizontal wall clearance for the held handgun), with the camera 1.7 units above its feet. The initial camera is raised by 0.7 units to preserve spawn foot clearance. Collision uses world-space triangles, including parent transforms, and excludes the active camera node and its children. Swept tests prevent movement through thin surfaces. This is a basic static controller: there is no automatic stair climbing, moving-object physics, spawn-overlap recovery, or respawn after falling out of the scene. Start in clear space; fly mode can reposition the camera if needed.
 
 ## Load a scene
 
@@ -114,6 +117,7 @@ cargo run -- --no-validation
 | --- | --- |
 | `src/main.rs` | CLI, SDL keyboard/mouse events, capture/fullscreen, resize/minimize handling, smoke test |
 | `src/camera.rs` | First-person/orbit camera math, walking/flying, projection import and validation |
+| `src/collision.rs` | Static scene triangle extraction, swept player-box collision and sliding |
 | `src/scene.rs` | glTF import, meshes/materials/cameras, node transforms, camera attachment, draw list |
 | `src/renderer.rs` | Vulkan instance/device, swapchain, pipeline, frame synchronization, cleanup |
 | `src/renderer/scene_gpu.rs` | VMA scene uploads, texture descriptors, per-frame render items and indirect commands |
